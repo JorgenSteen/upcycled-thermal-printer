@@ -550,7 +550,14 @@ class LabelApp(tk.Tk):
     def _help_about(self) -> None:
         self._help_window(
             "About Flex Label",
-            "Flex Label — block-based designer for the Alere BTP-L560.\n\n"
+            "Flex Label — block-based designer for the Alere BTP-L560.\n"
+            "\n"
+            "Talks ESC/POS over the Windows print spooler (python-escpos\n"
+            "Win32Raw). Should work on most other ESC/POS thermal label or\n"
+            "receipt printers — anything that accepts raw ESC/POS bytes and\n"
+            "renders bitmaps via GS v 0 / ESC * — though tear-bar feed and\n"
+            "media width may need tuning in Settings.\n"
+            "\n"
             "Per-block formatting · QR · spacers · cut markers · live preview.\n\n"
             "Presets are stored as JSON files in ./presets/ next to the script.\n"
             "Settings are stored in flex_label_settings.json.\n\n"
