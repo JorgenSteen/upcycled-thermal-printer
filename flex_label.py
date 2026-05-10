@@ -34,6 +34,15 @@ PREVIEW_ZOOM = 1
 
 ALIGN_OPTIONS = ("left", "center", "right")
 
+FONT_FAMILIES = (
+    "Arial",
+    "DejaVu Sans",
+    "Comic Sans MS",
+    "Century Gothic",
+    "Old English Text",
+    "Impact",
+)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 SETTINGS_PATH = SCRIPT_DIR / "flex_label_settings.json"
 PRESETS_DIR = SCRIPT_DIR / "presets"
@@ -193,16 +202,32 @@ def list_presets() -> list[Path]:
 def _font_candidates(family: str, bold: bool) -> list[str]:
     fam = (family or "").strip()
     fam_lower = fam.lower()
+    fallback = ["arialbd.ttf" if bold else "arial.ttf",
+                "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"]
+
     if fam_lower in ("", "arial"):
         if bold:
             return ["arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]
         return ["arial.ttf", "Arial.ttf", "DejaVuSans.ttf"]
     if "dejavu" in fam_lower:
         return ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"] if bold else ["DejaVuSans.ttf"]
+    if "comic" in fam_lower:
+        if bold:
+            return ["comicbd.ttf", "Comic Sans MS Bold.ttf", "comic.ttf"] + fallback
+        return ["comic.ttf", "Comic Sans MS.ttf"] + fallback
+    if "century" in fam_lower or fam_lower == "gothic":
+        if bold:
+            return ["GOTHICB.TTF", "gothicb.ttf", "Century Gothic Bold.ttf"] + fallback
+        return ["GOTHIC.TTF", "gothic.ttf", "Century Gothic.ttf"] + fallback
+    if "old english" in fam_lower or "blackletter" in fam_lower:
+        # Old English Text MT has no bold variant — let the regular TTF answer for both.
+        return ["OLDENGL.TTF", "oldengl.ttf", "Old English Text MT.ttf"] + fallback
+    if "impact" in fam_lower:
+        # Impact is already heavy; no separate bold variant on Windows.
+        return ["impact.ttf", "Impact.ttf"] + fallback
     if bold:
-        return [f"{fam} Bold.ttf", f"{fam}bd.ttf", f"{fam}.ttf",
-                "arialbd.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]
-    return [f"{fam}.ttf", "arial.ttf", "DejaVuSans.ttf"]
+        return [f"{fam} Bold.ttf", f"{fam}bd.ttf", f"{fam}.ttf"] + fallback
+    return [f"{fam}.ttf"] + fallback
 
 
 def load_font(family: str, size_pt: int, bold: bool) -> ImageFont.ImageFont:
@@ -433,8 +458,14 @@ class SettingsDialog(tk.Toplevel):
         ttk.Spinbox(body, from_=0, to=200, increment=1, textvariable=self.trail_var, width=10).grid(
             row=2, column=1, sticky="w", pady=4)
 
-        ttk.Label(body, text="Default font family:").grid(row=3, column=0, sticky="w", padx=4, pady=4)
-        ttk.Entry(body, textvariable=self.font_var, width=24).grid(row=3, column=1, sticky="ew", pady=4)
+        ttk.Label(body, text="Default font:").grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        # Preserve a custom legacy value (from a hand-edited settings file) by prepending it.
+        font_values = list(FONT_FAMILIES)
+        current_font = self.font_var.get().strip()
+        if current_font and current_font not in font_values:
+            font_values.insert(0, current_font)
+        ttk.Combobox(body, textvariable=self.font_var, values=font_values,
+                     state="readonly", width=22).grid(row=3, column=1, sticky="w", pady=4)
 
         ttk.Label(body, text="Default text size (pt):").grid(row=4, column=0, sticky="w", padx=4, pady=4)
         ttk.Spinbox(body, from_=6, to=96, increment=1, textvariable=self.size_var, width=10).grid(
