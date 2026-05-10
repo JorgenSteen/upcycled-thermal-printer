@@ -116,9 +116,14 @@ class LabelDoc:
     Per-element alignment (left/center/right) lives on each individual element
     (TextBlock, QRBlock, …); there's no doc-level alignment because there's no
     narrower-band-within-wider-tape concept anymore.
+
+    `center_vertically` shifts the whole stack downward so it sits centred
+    within sticker_height, with equal whitespace above and below. When it
+    fits — if content is taller than the sticker, no offset is applied.
     """
     copies: int = 1
     copy_spacer_mm: float = 3.0
+    center_vertically: bool = False
     elements: list = field(default_factory=list)
 
 
@@ -167,6 +172,7 @@ def doc_to_dict(doc: LabelDoc) -> dict:
         "schema_version": 1,
         "copies": doc.copies,
         "copy_spacer_mm": doc.copy_spacer_mm,
+        "center_vertically": doc.center_vertically,
         "elements": [
             {"type": ELEMENT_TYPE_NAMES[type(el)], **asdict(el)}
             for el in doc.elements
@@ -192,6 +198,7 @@ def dict_to_doc(data: dict) -> LabelDoc:
     return LabelDoc(
         copies=max(1, int(data.get("copies", 1))),
         copy_spacer_mm=float(data.get("copy_spacer_mm", 3.0)),
+        center_vertically=bool(data.get("center_vertically", False)),
         elements=elements,
     )
 
@@ -427,9 +434,14 @@ def render_label(doc: LabelDoc, settings: Settings, font_family: str) -> Image.I
     copies = max(1, min(50, doc.copies))
 
     single = _render_content(doc, sw, font_family)
+    stack_h = copies * single.height + (copies - 1) * spacer
+    # Vertical centring: only when the stack actually fits — otherwise top-align
+    # so the *first* copy stays visible (overflow gets clipped at the bottom).
+    y_offset = max(0, (sh - stack_h) // 2) if doc.center_vertically and stack_h <= sh else 0
+
     canvas = Image.new("L", (sw, sh), color=255)
     for i in range(copies):
-        y = i * (single.height + spacer)
+        y = y_offset + i * (single.height + spacer)
         if y >= sh:
             break  # silent truncation — visible in preview
         clip_h = min(single.height, sh - y)
@@ -774,6 +786,11 @@ class LabelApp(tk.Tk):
                        "Per-block alignment is on each text/QR block.",
                   foreground="#666", justify="left").pack(anchor="w", pady=(0, 8))
 
+        self.center_var = tk.BooleanVar(value=self.doc.center_vertically)
+        ttk.Checkbutton(parent, text="Center vertically inside sticker",
+                        variable=self.center_var,
+                        command=self._on_center_change).pack(anchor="w", pady=(0, 8))
+
         copies_frame = ttk.LabelFrame(parent, text="Copies (within one sticker)", padding=8)
         copies_frame.pack(fill="x", pady=(0, 8))
 
@@ -1003,6 +1020,10 @@ class LabelApp(tk.Tk):
             return
         self.refresh_preview()
 
+    def _on_center_change(self) -> None:
+        self.doc.center_vertically = bool(self.center_var.get())
+        self.refresh_preview()
+
     def action_calc_copies(self) -> None:
         """Set copies to the maximum number of content blocks that fit within
         one sticker_height (the per-sticker vertical budget)."""
@@ -1088,6 +1109,7 @@ class LabelApp(tk.Tk):
         self.doc = LabelDoc()
         self.copies_var.set(self.doc.copies)
         self.copy_spacer_var.set(self.doc.copy_spacer_mm)
+        self.center_var.set(self.doc.center_vertically)
         self.preset_var.set("")
         self.selected_index = None
         self.refresh_all()
@@ -1134,6 +1156,7 @@ class LabelApp(tk.Tk):
             return
         self.copies_var.set(self.doc.copies)
         self.copy_spacer_var.set(self.doc.copy_spacer_mm)
+        self.center_var.set(self.doc.center_vertically)
         self.selected_index = None
         self.refresh_all()
         self.status_var.set(f"Loaded {path.name}.")
