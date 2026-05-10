@@ -335,6 +335,31 @@ def render_spacer(block: Spacer, width_dots: int) -> Image.Image:
     return Image.new("L", (width_dots, h), color=255)
 
 
+def _draw_dashed_hline(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int,
+                       fill, width: int = 2, seg: int = 8, gap: int = 5) -> None:
+    x = x0
+    while x < x1:
+        draw.line([(x, y), (min(x + seg, x1), y)], fill=fill, width=width)
+        x += seg + gap
+
+
+def _draw_dashed_vline(draw: ImageDraw.ImageDraw, y0: int, y1: int, x: int,
+                       fill, width: int = 2, seg: int = 8, gap: int = 5) -> None:
+    y = y0
+    while y < y1:
+        draw.line([(x, y), (x, min(y + seg, y1))], fill=fill, width=width)
+        y += seg + gap
+
+
+def _draw_dashed_rect(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+                      fill, width: int = 2) -> None:
+    x0, y0, x1, y1 = box
+    _draw_dashed_hline(draw, x0, x1, y0, fill, width)
+    _draw_dashed_hline(draw, x0, x1, y1 - 1, fill, width)
+    _draw_dashed_vline(draw, y0, y1, x0, fill, width)
+    _draw_dashed_vline(draw, y0, y1, x1 - 1, fill, width)
+
+
 def render_cut_marker(block: CutMarker, width_dots: int, font_family: str) -> Image.Image:
     cap_font = load_font(font_family, 7, False) if block.label else None
     cap_h = _font_line_height(cap_font) if cap_font else 0
@@ -349,16 +374,12 @@ def render_cut_marker(block: CutMarker, width_dots: int, font_family: str) -> Im
         draw.text((x, 0), block.label, fill=0, font=cap_font)
 
     y = cap_h + dash_band // 2
-    seg, gap = 8, 5
-    x = 0
-    while x < width_dots:
-        x_end = min(x + seg, width_dots)
-        draw.line([(x, y), (x_end, y)], fill=0, width=2)
-        x += seg + gap
+    _draw_dashed_hline(draw, 0, width_dots, y, fill=0, width=2)
     return img
 
 
-def render_label(doc: LabelDoc, font_family: str) -> Image.Image:
+def _render_single_copy(doc: LabelDoc, font_family: str) -> Image.Image:
+    """Render exactly one copy of the document — no copies/spacers applied."""
     tape_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.tape_width_mm * DOTS_PER_MM))))
     usable_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.usable_width_mm * DOTS_PER_MM))))
     usable_dots = min(usable_dots, tape_dots)
@@ -397,6 +418,68 @@ def render_label(doc: LabelDoc, font_family: str) -> Image.Image:
         x = (tape_dots - usable_dots) // 2
     full.paste(usable_canvas, (x, 0))
     return full
+
+
+def _slot_geometry(doc: LabelDoc, content_h: int) -> tuple[int, int, int]:
+    """Return (slot_height_dots, spacer_dots, copies) for the multi-copy stack.
+
+    slot_height = max(content_h, sticker_height_dots) so a content-taller-than
+    -sticker case overflows downward but doesn't break.
+    """
+    copies = max(1, min(200, doc.copies))
+    sticker_dots = max(0, int(round(doc.sticker_height_mm * DOTS_PER_MM)))
+    slot_h = max(content_h, sticker_dots) if sticker_dots > 0 else content_h
+    spacer_dots = max(0, int(round(doc.copy_spacer_mm * DOTS_PER_MM))) if copies > 1 else 0
+    return slot_h, spacer_dots, copies
+
+
+def render_label(doc: LabelDoc, font_family: str) -> Image.Image:
+    """Bitmap that gets sent to the printer — N copies stacked with spacers."""
+    single = _render_single_copy(doc, font_family)
+    slot_h, spacer_dots, copies = _slot_geometry(doc, single.height)
+
+    if copies == 1 and slot_h == single.height:
+        return single
+
+    total_h = copies * slot_h + (copies - 1) * spacer_dots
+    canvas = Image.new("L", (single.width, total_h), color=255)
+    for i in range(copies):
+        slot_top = i * (slot_h + spacer_dots)
+        canvas.paste(single, (0, slot_top))
+    return canvas
+
+
+def render_preview(doc: LabelDoc, font_family: str) -> Image.Image:
+    """Preview render — same bitmap as render_label() plus red dashed sticker outlines.
+
+    The outline never reaches the printer; print_doc() calls render_label().
+    """
+    bitmap = render_label(doc, font_family)
+    if doc.sticker_height_mm <= 0:
+        return bitmap.convert("RGB")
+
+    rgb = bitmap.convert("RGB")
+    draw = ImageDraw.Draw(rgb)
+    single_h = _render_single_copy(doc, font_family).height
+    slot_h, spacer_dots, copies = _slot_geometry(doc, single_h)
+    sticker_dots = max(1, int(round(doc.sticker_height_mm * DOTS_PER_MM)))
+    usable_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.usable_width_mm * DOTS_PER_MM))))
+    tape_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.tape_width_mm * DOTS_PER_MM))))
+    usable_dots = min(usable_dots, tape_dots)
+    if doc.h_align == "left":
+        outline_x0 = 0
+    elif doc.h_align == "right":
+        outline_x0 = tape_dots - usable_dots
+    else:
+        outline_x0 = (tape_dots - usable_dots) // 2
+    outline_x1 = outline_x0 + usable_dots
+
+    red = (220, 30, 30)
+    for i in range(copies):
+        slot_top = i * (slot_h + spacer_dots)
+        _draw_dashed_rect(draw, (outline_x0, slot_top, outline_x1, slot_top + sticker_dots),
+                          fill=red, width=2)
+    return rgb
 
 
 # --------------------------------------------------------------------------- #
@@ -1087,7 +1170,7 @@ class LabelApp(tk.Tk):
 
     def refresh_preview(self) -> None:
         try:
-            img = render_label(self.doc, self.settings.default_font_family)
+            img = render_preview(self.doc, self.settings.default_font_family)
         except Exception as e:  # noqa: BLE001 — render bugs shouldn't crash the GUI
             self.status_var.set(f"Preview error: {e}")
             self.print_btn.configure(state="disabled")
@@ -1104,9 +1187,13 @@ class LabelApp(tk.Tk):
         self.preview_canvas.configure(scrollregion=(0, 0, zoomed.width, zoomed.height))
 
         approx_mm = img.height / DOTS_PER_MM
-        self.preview_info_var.set(
-            f"{img.width}×{img.height} dots · {approx_mm:.1f} mm tall · {len(self.doc.elements)} blocks"
-        )
+        copies = max(1, self.doc.copies)
+        copy_word = "copy" if copies == 1 else "copies"
+        info = (f"{img.width}×{img.height} dots · {approx_mm:.1f} mm tall · "
+                f"{len(self.doc.elements)} blocks · {copies} {copy_word}")
+        if self.doc.sticker_height_mm > 0:
+            info += f" · sticker {self.doc.sticker_height_mm:g} mm"
+        self.preview_info_var.set(info)
         self.print_btn.configure(state=("normal" if self.doc.elements else "disabled"))
 
 
