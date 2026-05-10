@@ -54,6 +54,7 @@ PRESETS_DIR = SCRIPT_DIR / "presets"
 
 @dataclass
 class TextBlock:
+    """One paragraph of text with its own size, weight, and alignment."""
     text: str = ""
     size_pt: int = 12
     bold: bool = False
@@ -68,6 +69,7 @@ class TextBlock:
 
 @dataclass
 class QRBlock:
+    """A QR code rendered as a square bitmap, sized in mm."""
     data: str = ""
     size_mm: float = 18.0
     align: str = "center"
@@ -79,6 +81,7 @@ class QRBlock:
 
 @dataclass
 class Spacer:
+    """Invisible vertical whitespace — pushes the next element down."""
     height_mm: float = 2.0
 
     def summary(self) -> str:
@@ -87,6 +90,7 @@ class Spacer:
 
 @dataclass
 class CutMarker:
+    """A printed dashed line + optional caption — visible 'cut here' guide."""
     label: str = "cut here"
 
     def summary(self) -> str:
@@ -106,6 +110,14 @@ ELEMENT_TYPE_NAMES: dict[type, str] = {v: k for k, v in ELEMENT_TYPES.items()}
 
 @dataclass
 class LabelDoc:
+    """A complete label design — tape dimensions plus an ordered list of elements.
+
+    Multi-copy fields configure how `render_label` stacks duplicates: each copy
+    occupies max(content_height, sticker_height_mm) of vertical space, with
+    copy_spacer_mm of whitespace between copies. sticker_height_mm doubles as
+    the size of the red dashed outline drawn on the preview (and only the
+    preview — see render_preview).
+    """
     tape_width_mm: float = 56.0
     usable_width_mm: float = 56.0
     h_align: str = "center"
@@ -117,6 +129,11 @@ class LabelDoc:
 
 @dataclass
 class Settings:
+    """Per-machine settings — printer queue name, feed tuning, default font.
+
+    Not part of the document; persisted to flex_label_settings.json next to
+    the script. Loaded once at app launch and edited via SettingsDialog.
+    """
     printer_name: str = "BTP-L560"
     leading_feed_mm: float = 0.0
     trailing_feed_mm: float = 70.0
@@ -209,6 +226,14 @@ def list_presets() -> list[Path]:
 # --------------------------------------------------------------------------- #
 
 def _font_candidates(family: str, bold: bool) -> list[str]:
+    """Return TTF filenames to try for a given family + weight.
+
+    PIL's ImageFont.truetype() looks up by filename, not family name, so we
+    map each user-facing family to its real TTF on Windows (Comic Sans MS →
+    comic.ttf / comicbd.ttf, etc.) and tack a fallback chain on the end —
+    Arial → DejaVu Sans → bitmap default — so a font not installed on the
+    host degrades gracefully instead of erroring.
+    """
     fam = (family or "").strip()
     fam_lower = fam.lower()
     fallback = ["arialbd.ttf" if bold else "arial.ttf",
@@ -522,6 +547,8 @@ def print_doc(doc: LabelDoc, settings: Settings) -> None:
 # --------------------------------------------------------------------------- #
 
 class SettingsDialog(tk.Toplevel):
+    """Modal dialog for editing per-machine Settings (printer name, feed mm, default font)."""
+
     def __init__(self, parent: tk.Misc, settings: Settings, on_save: Callable[[Settings], None]) -> None:
         super().__init__(parent)
         self.title("Settings")
@@ -587,6 +614,8 @@ class SettingsDialog(tk.Toplevel):
 
 
 class LabelApp(tk.Tk):
+    """Main window — three columns: front-panel controls, element list + editor, preview canvas."""
+
     def __init__(self) -> None:
         super().__init__()
         self.title("Flex Label — BTP-L560")
