@@ -109,6 +109,9 @@ class LabelDoc:
     tape_width_mm: float = 56.0
     usable_width_mm: float = 56.0
     h_align: str = "center"
+    sticker_height_mm: float = 0.0      # 0 = continuous tape, no outline drawn
+    copies: int = 1
+    copy_spacer_mm: float = 3.0
     elements: list = field(default_factory=list)
 
 
@@ -146,6 +149,9 @@ def doc_to_dict(doc: LabelDoc) -> dict:
         "tape_width_mm": doc.tape_width_mm,
         "usable_width_mm": doc.usable_width_mm,
         "h_align": doc.h_align,
+        "sticker_height_mm": doc.sticker_height_mm,
+        "copies": doc.copies,
+        "copy_spacer_mm": doc.copy_spacer_mm,
         "elements": [
             {"type": ELEMENT_TYPE_NAMES[type(el)], **asdict(el)}
             for el in doc.elements
@@ -169,6 +175,9 @@ def dict_to_doc(data: dict) -> LabelDoc:
         tape_width_mm=float(data.get("tape_width_mm", 56.0)),
         usable_width_mm=float(data.get("usable_width_mm", 56.0)),
         h_align=data.get("h_align", "center"),
+        sticker_height_mm=float(data.get("sticker_height_mm", 0.0)),
+        copies=max(1, int(data.get("copies", 1))),
+        copy_spacer_mm=float(data.get("copy_spacer_mm", 3.0)),
         elements=elements,
     )
 
