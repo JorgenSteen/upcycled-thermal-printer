@@ -527,17 +527,120 @@ class LabelApp(tk.Tk):
         menubar.add_cascade(label="Settings", menu=settings_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="About", command=self._about)
+        help_menu.add_command(label="About", command=self._help_about)
+        help_menu.add_separator()
+        help_menu.add_command(label="Tape & sticker sizes…", command=self._help_tape)
+        help_menu.add_command(label="Element types…", command=self._help_elements)
+        help_menu.add_command(label="Printing & feed tuning…", command=self._help_printing)
         menubar.add_cascade(label="Help", menu=help_menu)
 
         self.config(menu=menubar)
 
-    def _about(self) -> None:
-        messagebox.showinfo(
+    def _help_window(self, title: str, body: str) -> None:
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.transient(self)
+        text = tk.Text(win, wrap="word", width=72, height=24,
+                       padx=12, pady=10, relief="flat", background="#fafafa")
+        text.insert("1.0", body)
+        text.configure(state="disabled")
+        text.pack(fill="both", expand=True)
+        ttk.Button(win, text="Close", command=win.destroy).pack(pady=8)
+
+    def _help_about(self) -> None:
+        self._help_window(
             "About Flex Label",
             "Flex Label — block-based designer for the Alere BTP-L560.\n\n"
-            "Per-block formatting · QR · spacers · cut markers · live preview\n"
-            "Presets save to ./presets/. Settings save to flex_label_settings.json.",
+            "Per-block formatting · QR · spacers · cut markers · live preview.\n\n"
+            "Presets are stored as JSON files in ./presets/ next to the script.\n"
+            "Settings are stored in flex_label_settings.json.\n\n"
+            "Run on Windows to print. The GUI and preview also work on Linux/WSL "
+            "but the Print button needs the Windows print spooler.",
+        )
+
+    def _help_tape(self) -> None:
+        self._help_window(
+            "Tape & sticker sizes",
+            "TAPE WIDTH is the physical width of the paper coming out of the\n"
+            "printer — not the printable area, not the sticker face. For OEM\n"
+            "Alere rolls that's 56 mm. For 58 mm continuous receipt rolls it's\n"
+            "58 mm. Set this to whatever roll you have loaded.\n"
+            "\n"
+            "USABLE WIDTH is how much of that tape you actually want to print on.\n"
+            "Set it smaller than the tape width if your stickers have a margin\n"
+            "or you only want a strip of content. \"Place usable area\" controls\n"
+            "whether the unused band sits on the left, right, or splits centred.\n"
+            "\n"
+            "THERE IS NO SEPARATE \"STICKER HEIGHT\" SETTING — and that's\n"
+            "intentional. The app doesn't know whether you're on die-cut labels\n"
+            "(fixed height per sticker) or continuous tape, and it doesn't need\n"
+            "to. Each label's height is just the sum of the elements you stack.\n"
+            "\n"
+            "  • For one die-cut sticker: build elements until the preview info\n"
+            "    bar shows roughly your sticker height in mm.\n"
+            "  • For multiple stickers on one stretch of tape: keep stacking,\n"
+            "    and put a Cut Marker between sections so you can see where to\n"
+            "    cut with scissors.\n"
+            "\n"
+            "TRAILING FEED in Settings (default 70 mm) is what advances the\n"
+            "paper after the print so the perforation clears the tear bar — it's\n"
+            "not a sticker-height value. If your tear is short, raise it; if you\n"
+            "waste a blank label between prints, lower it.",
+        )
+
+    def _help_elements(self) -> None:
+        self._help_window(
+            "Element types",
+            "TEXT BLOCK\n"
+            "  A paragraph with its own font size (in points), bold flag, and\n"
+            "  alignment. Add more than one to mix sizes — e.g. a big bold\n"
+            "  \"title\" block above a smaller body block.\n"
+            "\n"
+            "QR CODE\n"
+            "  Encodes any string (URL, lot number, free text). Size in mm.\n"
+            "  Scans cleanly down to about 12 mm at this resolution.\n"
+            "\n"
+            "SPACER\n"
+            "  Blank vertical space, in millimetres. Has NO visible content —\n"
+            "  it just pushes the next block down. Use it for breathing room\n"
+            "  between two text blocks.\n"
+            "\n"
+            "CUT MARKER\n"
+            "  A dashed line with an optional caption like \"cut here\". DOES\n"
+            "  print — it's a visible mark on the tape so you know where to\n"
+            "  scissor. Use this between two stickers' worth of content when\n"
+            "  printing several labels on one stretch of tape.\n"
+            "\n"
+            "Spacer vs Cut marker: a Spacer is invisible whitespace; a Cut\n"
+            "Marker is a printed line that tells you where to scissor.\n"
+            "\n"
+            "Re-order blocks with the ↑ Up / ↓ Down buttons. Delete with ✕.",
+        )
+
+    def _help_printing(self) -> None:
+        self._help_window(
+            "Printing & feed tuning",
+            "PRINTER NAME\n"
+            "  Windows printer queue name. Default \"BTP-L560\" (matches the\n"
+            "  install in RECIPE.md). If you renamed the queue, run\n"
+            "  `python list_printers.py` to find the exact name and paste it\n"
+            "  here.\n"
+            "\n"
+            "LEADING FEED (mm)\n"
+            "  Paper advanced BEFORE printing. Set this small positive value\n"
+            "  if your content lands too high on the sticker. Typical: 0.\n"
+            "\n"
+            "TRAILING FEED (mm)\n"
+            "  Paper advanced AFTER printing. Default 70 mm. This pushes the\n"
+            "  printed sticker past the tear bar so you can rip it off cleanly.\n"
+            "  Raise it if your tear edge is short of the bar; lower it if you\n"
+            "  waste a blank label between prints.\n"
+            "\n"
+            "DEFAULT FONT / DEFAULT SIZE (pt)\n"
+            "  Applied to NEW text blocks you add from now on. Existing blocks\n"
+            "  keep their own size. The dropdown lists fonts that ship with\n"
+            "  Windows or MS Office; if a font isn't installed, the app silently\n"
+            "  falls back to Arial.",
         )
 
     # ---- Layout ----
