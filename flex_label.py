@@ -697,13 +697,13 @@ class LabelApp(tk.Tk):
         self.preset_var = tk.StringVar()
         self.preset_combo = ttk.Combobox(preset, textvariable=self.preset_var, state="readonly")
         self.preset_combo.pack(fill="x", pady=2)
-        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        # No auto-load on dropdown selection — Load is an explicit click below.
 
         btnrow = ttk.Frame(preset)
         btnrow.pack(fill="x", pady=2)
         ttk.Button(btnrow, text="Save", command=self.action_save_preset).pack(
             side="left", expand=True, fill="x", padx=(0, 2))
-        ttk.Button(btnrow, text="Reload", command=self._refresh_preset_combo).pack(
+        ttk.Button(btnrow, text="Load", command=self.action_load_selected_preset).pack(
             side="left", expand=True, fill="x", padx=2)
         ttk.Button(btnrow, text="Delete", command=self.action_delete_preset).pack(
             side="left", expand=True, fill="x", padx=(2, 0))
@@ -983,13 +983,18 @@ class LabelApp(tk.Tk):
             return
         self._load_preset_path(Path(path_str))
 
-    def _on_preset_selected(self, _event: object = None) -> None:
+    def action_load_selected_preset(self) -> None:
+        # Pick up new files dropped into ./presets/ since the app started.
+        self._refresh_preset_combo()
         name = self.preset_var.get()
         if not name:
+            messagebox.showinfo("Load preset", "Pick a preset from the dropdown first.")
             return
         path = PRESETS_DIR / f"{name}.json"
-        if path.exists():
-            self._load_preset_path(path)
+        if not path.exists():
+            messagebox.showerror("Load failed", f"{path.name} not found.")
+            return
+        self._load_preset_path(path)
 
     def _load_preset_path(self, path: Path) -> None:
         try:
