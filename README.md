@@ -50,7 +50,7 @@ rendering · `p.image()` · `ESC J` paper feed.
 
 ## Setup
 
-Full Windows install walkthrough is in **[`RECIPE.md`](RECIPE.md)**.
+Full Windows install walkthrough is in **[`doc/RECIPE.md`](doc/RECIPE.md)**.
 TL;DR:
 
 ```powershell
@@ -59,7 +59,7 @@ python tools/list_printers.py        # confirm the exact Windows printer name
 python flex_label.py
 ```
 
-For label rolls that fit, see **[`BUYING_LABELS.md`](BUYING_LABELS.md)**.
+For label rolls that fit, see **[`doc/BUYING_LABELS.md`](doc/BUYING_LABELS.md)**.
 
 ## Tools (`tools/`)
 
