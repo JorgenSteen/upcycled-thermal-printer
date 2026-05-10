@@ -670,20 +670,22 @@ class LabelApp(tk.Tk):
             "or you only want a strip of content. \"Place usable area\" controls\n"
             "whether the unused band sits on the left, right, or splits centred.\n"
             "\n"
-            "THERE IS NO SEPARATE \"STICKER HEIGHT\" SETTING — and that's\n"
-            "intentional. The app doesn't know whether you're on die-cut labels\n"
-            "(fixed height per sticker) or continuous tape, and it doesn't need\n"
-            "to. Each label's height is just the sum of the elements you stack.\n"
+            "STICKER HEIGHT is the height of one die-cut sticker (e.g. 70 mm for\n"
+            "the OEM Alere rolls, 40 mm for many generic 60×40 rolls). When set,\n"
+            "the preview draws a red dashed rectangle around each sticker so you\n"
+            "can see how your content fits — handy for checking that a \"big\"\n"
+            "layout actually fits, or that smaller content sits where you want\n"
+            "it inside the sticker. Set to 0 for continuous tape (no outline).\n"
             "\n"
-            "  • For one die-cut sticker: build elements until the preview info\n"
-            "    bar shows roughly your sticker height in mm.\n"
-            "  • For multiple stickers on one stretch of tape: keep stacking,\n"
-            "    and put a Cut Marker between sections so you can see where to\n"
-            "    cut with scissors.\n"
+            "MULTI-COPY PRINTING. The Copies field stacks N duplicates of your\n"
+            "design in one print job, separated by the configurable mm gap.\n"
+            "Use \"Fill to: [N] mm  [Calc copies]\" to compute how many copies\n"
+            "fit in a target tape length — type the target, click Calc, the\n"
+            "Copies field updates. Then Print and scissor them apart.\n"
             "\n"
-            "TRAILING FEED in Settings (default 70 mm) is what advances the\n"
-            "paper after the print so the perforation clears the tear bar — it's\n"
-            "not a sticker-height value. If your tear is short, raise it; if you\n"
+            "TRAILING FEED in Settings (default 70 mm) is the separate \"advance\n"
+            "the tape so the perforation clears the tear bar\" knob — not the\n"
+            "same as sticker height. If your tear is short, raise it; if you\n"
             "waste a blank label between prints, lower it.",
         )
 
@@ -789,7 +791,50 @@ class LabelApp(tk.Tk):
             ttk.Radiobutton(align_row, text=opt.capitalize(), value=opt,
                             variable=self.h_align_var,
                             command=self._on_tape_change).pack(side="left")
+
+        self.sticker_height_var = tk.DoubleVar(value=self.doc.sticker_height_mm)
+        ttk.Label(tape, text="Sticker height (mm):").grid(row=3, column=0, sticky="w", pady=(8, 2))
+        sh = ttk.Spinbox(tape, from_=0, to=200, increment=1,
+                         textvariable=self.sticker_height_var, width=8,
+                         command=self._on_tape_change)
+        sh.grid(row=3, column=1, sticky="w", pady=(8, 2))
+        sh.bind("<KeyRelease>", lambda e: self._on_tape_change())
+        ttk.Label(tape, text="0 = continuous (no outline)",
+                  foreground="#888").grid(row=4, column=0, columnspan=2, sticky="w")
+
         tape.columnconfigure(1, weight=1)
+
+        copies_frame = ttk.LabelFrame(parent, text="Copies", padding=8)
+        copies_frame.pack(fill="x", pady=(0, 8))
+
+        self.copies_var = tk.IntVar(value=self.doc.copies)
+        self.copy_spacer_var = tk.DoubleVar(value=self.doc.copy_spacer_mm)
+        self.fill_target_var = tk.DoubleVar(value=200.0)
+
+        ttk.Label(copies_frame, text="Count:").grid(row=0, column=0, sticky="w", pady=2)
+        cn = ttk.Spinbox(copies_frame, from_=1, to=200, increment=1,
+                         textvariable=self.copies_var, width=8,
+                         command=self._on_copies_change)
+        cn.grid(row=0, column=1, sticky="w", pady=2)
+        cn.bind("<KeyRelease>", lambda e: self._on_copies_change())
+
+        ttk.Label(copies_frame, text="Gap between (mm):").grid(row=1, column=0, sticky="w", pady=2)
+        gp = ttk.Spinbox(copies_frame, from_=0, to=50, increment=0.5,
+                         textvariable=self.copy_spacer_var, width=8,
+                         command=self._on_copies_change)
+        gp.grid(row=1, column=1, sticky="w", pady=2)
+        gp.bind("<KeyRelease>", lambda e: self._on_copies_change())
+
+        fill_row = ttk.Frame(copies_frame)
+        fill_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Label(fill_row, text="Fill to:").pack(side="left")
+        ttk.Spinbox(fill_row, from_=10, to=2000, increment=10,
+                    textvariable=self.fill_target_var, width=7).pack(side="left", padx=(2, 2))
+        ttk.Label(fill_row, text="mm").pack(side="left")
+        ttk.Button(fill_row, text="Calc copies",
+                   command=self.action_calc_copies).pack(side="right")
+
+        copies_frame.columnconfigure(1, weight=1)
 
         preset = ttk.LabelFrame(parent, text="Presets", padding=8)
         preset.pack(fill="x", pady=(0, 8))
@@ -990,10 +1035,43 @@ class LabelApp(tk.Tk):
         try:
             self.doc.tape_width_mm = float(self.tape_width_var.get())
             self.doc.usable_width_mm = float(self.usable_width_var.get())
+            self.doc.sticker_height_mm = max(0.0, float(self.sticker_height_var.get()))
         except (ValueError, TypeError, tk.TclError):
             return
         self.doc.h_align = self.h_align_var.get()
         self.refresh_preview()
+
+    def _on_copies_change(self) -> None:
+        try:
+            self.doc.copies = max(1, min(200, int(self.copies_var.get())))
+            self.doc.copy_spacer_mm = max(0.0, float(self.copy_spacer_var.get()))
+        except (ValueError, TypeError, tk.TclError):
+            return
+        self.refresh_preview()
+
+    def action_calc_copies(self) -> None:
+        try:
+            target_mm = float(self.fill_target_var.get())
+        except (ValueError, TypeError, tk.TclError):
+            messagebox.showerror("Calc copies", "Enter a target length in mm.")
+            return
+        single = _render_single_copy(self.doc, self.settings.default_font_family)
+        h_single_mm = single.height / DOTS_PER_MM
+        slot_mm = max(h_single_mm, self.doc.sticker_height_mm) if self.doc.sticker_height_mm > 0 else h_single_mm
+        spacer = max(0.0, self.doc.copy_spacer_mm)
+        if slot_mm <= 0:
+            return
+        # k slots take k*slot + (k-1)*spacer ≤ target
+        k = int((target_mm + spacer) // (slot_mm + spacer))
+        if k < 1:
+            messagebox.showinfo(
+                "Calc copies",
+                f"One copy is {slot_mm:.1f} mm — doesn't fit in {target_mm:.0f} mm.",
+            )
+            return
+        self.copies_var.set(k)
+        self._on_copies_change()
+        self.status_var.set(f"Set copies to {k} (fits {target_mm:.0f} mm).")
 
     # ---- Selection / list actions ----
     def _on_select(self, _event: object = None) -> None:
@@ -1057,6 +1135,9 @@ class LabelApp(tk.Tk):
         self.tape_width_var.set(self.doc.tape_width_mm)
         self.usable_width_var.set(self.doc.usable_width_mm)
         self.h_align_var.set(self.doc.h_align)
+        self.sticker_height_var.set(self.doc.sticker_height_mm)
+        self.copies_var.set(self.doc.copies)
+        self.copy_spacer_var.set(self.doc.copy_spacer_mm)
         self.preset_var.set("")
         self.selected_index = None
         self.refresh_all()
@@ -1104,6 +1185,9 @@ class LabelApp(tk.Tk):
         self.tape_width_var.set(self.doc.tape_width_mm)
         self.usable_width_var.set(self.doc.usable_width_mm)
         self.h_align_var.set(self.doc.h_align)
+        self.sticker_height_var.set(self.doc.sticker_height_mm)
+        self.copies_var.set(self.doc.copies)
+        self.copy_spacer_var.set(self.doc.copy_spacer_mm)
         self.selected_index = None
         self.refresh_all()
         self.status_var.set(f"Loaded {path.name}.")
