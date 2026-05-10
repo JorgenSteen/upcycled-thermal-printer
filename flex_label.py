@@ -110,18 +110,13 @@ ELEMENT_TYPE_NAMES: dict[type, str] = {v: k for k, v in ELEMENT_TYPES.items()}
 
 @dataclass
 class LabelDoc:
-    """A complete label design — tape dimensions plus an ordered list of elements.
+    """A complete label design — content stacked vertically inside one sticker.
 
-    Multi-copy fields configure how `render_label` stacks duplicates: each copy
-    occupies max(content_height, sticker_height_mm) of vertical space, with
-    copy_spacer_mm of whitespace between copies. sticker_height_mm doubles as
-    the size of the red dashed outline drawn on the preview (and only the
-    preview — see render_preview).
+    Sticker / paper dimensions live in Settings (per-machine media properties).
+    Per-element alignment (left/center/right) lives on each individual element
+    (TextBlock, QRBlock, …); there's no doc-level alignment because there's no
+    narrower-band-within-wider-tape concept anymore.
     """
-    tape_width_mm: float = 56.0
-    usable_width_mm: float = 56.0
-    h_align: str = "center"
-    sticker_height_mm: float = 0.0      # 0 = continuous tape, no outline drawn
     copies: int = 1
     copy_spacer_mm: float = 3.0
     elements: list = field(default_factory=list)
@@ -129,14 +124,21 @@ class LabelDoc:
 
 @dataclass
 class Settings:
-    """Per-machine settings — printer queue name, feed tuning, default font.
+    """Per-machine settings — printer queue name, media dimensions, default font.
 
-    Not part of the document; persisted to flex_label_settings.json next to
-    the script. Loaded once at app launch and edited via SettingsDialog.
+    Sticker = the visible adhesive label face (printable area).
+    Paper   = the waxy liner that runs through the printer.
+    paper_height_mm is the total advance per print: sticker_height covers the
+    sticker face, the rest covers the inter-sticker gap and tear-bar clearance.
+
+    Persisted to flex_label_settings.json next to the script. Loaded once at
+    app launch and edited via SettingsDialog.
     """
     printer_name: str = "BTP-L560"
-    leading_feed_mm: float = 0.0
-    trailing_feed_mm: float = 70.0
+    sticker_width_mm: float = 58.0    # printable width on the visible label face
+    sticker_height_mm: float = 70.0   # printable height on the visible label face
+    paper_width_mm: float = 62.0      # liner width (informational; not enforced)
+    paper_height_mm: float = 85.0     # total advance per print = sticker + gap + tear-bar
     default_font_family: str = "Arial"
     default_size_pt: int = 12
 
@@ -163,10 +165,6 @@ def save_settings(settings: Settings) -> None:
 def doc_to_dict(doc: LabelDoc) -> dict:
     return {
         "schema_version": 1,
-        "tape_width_mm": doc.tape_width_mm,
-        "usable_width_mm": doc.usable_width_mm,
-        "h_align": doc.h_align,
-        "sticker_height_mm": doc.sticker_height_mm,
         "copies": doc.copies,
         "copy_spacer_mm": doc.copy_spacer_mm,
         "elements": [
@@ -177,6 +175,9 @@ def doc_to_dict(doc: LabelDoc) -> dict:
 
 
 def dict_to_doc(data: dict) -> LabelDoc:
+    """Load a LabelDoc from JSON. Legacy keys (tape_width_mm, usable_width_mm,
+    sticker_height_mm, h_align) are silently ignored — they're either moved
+    to Settings or dropped."""
     elements: list[Element] = []
     for raw in data.get("elements", []):
         kind = raw.get("type")
@@ -189,10 +190,6 @@ def dict_to_doc(data: dict) -> LabelDoc:
         except TypeError:
             continue
     return LabelDoc(
-        tape_width_mm=float(data.get("tape_width_mm", 56.0)),
-        usable_width_mm=float(data.get("usable_width_mm", 56.0)),
-        h_align=data.get("h_align", "center"),
-        sticker_height_mm=float(data.get("sticker_height_mm", 0.0)),
         copies=max(1, int(data.get("copies", 1))),
         copy_spacer_mm=float(data.get("copy_spacer_mm", 3.0)),
         elements=elements,
@@ -368,23 +365,6 @@ def _draw_dashed_hline(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int,
         x += seg + gap
 
 
-def _draw_dashed_vline(draw: ImageDraw.ImageDraw, y0: int, y1: int, x: int,
-                       fill, width: int = 2, seg: int = 8, gap: int = 5) -> None:
-    y = y0
-    while y < y1:
-        draw.line([(x, y), (x, min(y + seg, y1))], fill=fill, width=width)
-        y += seg + gap
-
-
-def _draw_dashed_rect(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
-                      fill, width: int = 2) -> None:
-    x0, y0, x1, y1 = box
-    _draw_dashed_hline(draw, x0, x1, y0, fill, width)
-    _draw_dashed_hline(draw, x0, x1, y1 - 1, fill, width)
-    _draw_dashed_vline(draw, y0, y1, x0, fill, width)
-    _draw_dashed_vline(draw, y0, y1, x1 - 1, fill, width)
-
-
 def render_cut_marker(block: CutMarker, width_dots: int, font_family: str) -> Image.Image:
     cap_font = load_font(font_family, 7, False) if block.label else None
     cap_h = _font_line_height(cap_font) if cap_font else 0
@@ -403,108 +383,66 @@ def render_cut_marker(block: CutMarker, width_dots: int, font_family: str) -> Im
     return img
 
 
-def _render_single_copy(doc: LabelDoc, font_family: str) -> Image.Image:
-    """Render exactly one copy of the document — no copies/spacers applied."""
-    tape_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.tape_width_mm * DOTS_PER_MM))))
-    usable_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.usable_width_mm * DOTS_PER_MM))))
-    usable_dots = min(usable_dots, tape_dots)
+def _render_content(doc: LabelDoc, width_dots: int, font_family: str) -> Image.Image:
+    """Render the doc's elements into a vertical strip of `width_dots`.
 
+    Each element renders to its own row at the full strip width and they stack
+    top-to-bottom. No padding to sticker height — that happens in render_label.
+    Per-element alignment (left/center/right) is handled by the element's own
+    `align` field inside its render_* function.
+    """
     strips: list[Image.Image] = []
     for el in doc.elements:
         if isinstance(el, TextBlock):
-            strips.append(render_text(el, usable_dots, font_family))
+            strips.append(render_text(el, width_dots, font_family))
         elif isinstance(el, QRBlock):
-            strips.append(render_qr(el, usable_dots))
+            strips.append(render_qr(el, width_dots))
         elif isinstance(el, Spacer):
-            strips.append(render_spacer(el, usable_dots))
+            strips.append(render_spacer(el, width_dots))
         elif isinstance(el, CutMarker):
-            strips.append(render_cut_marker(el, usable_dots, font_family))
+            strips.append(render_cut_marker(el, width_dots, font_family))
 
     if not strips:
-        blank_h = max(1, int(round(20 * DOTS_PER_MM)))
-        return Image.new("L", (tape_dots, blank_h), color=255)
+        return Image.new("L", (width_dots, 1), color=255)
 
     total_h = sum(s.height for s in strips)
-    usable_canvas = Image.new("L", (usable_dots, total_h), color=255)
+    canvas = Image.new("L", (width_dots, total_h), color=255)
     y = 0
     for strip in strips:
-        usable_canvas.paste(strip, (0, y))
+        canvas.paste(strip, (0, y))
         y += strip.height
-
-    if usable_dots == tape_dots:
-        return usable_canvas
-
-    full = Image.new("L", (tape_dots, total_h), color=255)
-    if doc.h_align == "left":
-        x = 0
-    elif doc.h_align == "right":
-        x = tape_dots - usable_dots
-    else:
-        x = (tape_dots - usable_dots) // 2
-    full.paste(usable_canvas, (x, 0))
-    return full
-
-
-def _slot_geometry(doc: LabelDoc, content_h: int) -> tuple[int, int, int]:
-    """Return (slot_height_dots, spacer_dots, copies) for the multi-copy stack.
-
-    slot_height = max(content_h, sticker_height_dots) so a content-taller-than
-    -sticker case overflows downward but doesn't break.
-    """
-    copies = max(1, min(200, doc.copies))
-    sticker_dots = max(0, int(round(doc.sticker_height_mm * DOTS_PER_MM)))
-    slot_h = max(content_h, sticker_dots) if sticker_dots > 0 else content_h
-    spacer_dots = max(0, int(round(doc.copy_spacer_mm * DOTS_PER_MM))) if copies > 1 else 0
-    return slot_h, spacer_dots, copies
-
-
-def render_label(doc: LabelDoc, font_family: str) -> Image.Image:
-    """Bitmap that gets sent to the printer — N copies stacked with spacers."""
-    single = _render_single_copy(doc, font_family)
-    slot_h, spacer_dots, copies = _slot_geometry(doc, single.height)
-
-    if copies == 1 and slot_h == single.height:
-        return single
-
-    total_h = copies * slot_h + (copies - 1) * spacer_dots
-    canvas = Image.new("L", (single.width, total_h), color=255)
-    for i in range(copies):
-        slot_top = i * (slot_h + spacer_dots)
-        canvas.paste(single, (0, slot_top))
     return canvas
 
 
-def render_preview(doc: LabelDoc, font_family: str) -> Image.Image:
-    """Preview render — same bitmap as render_label() plus red dashed sticker outlines.
+def render_label(doc: LabelDoc, settings: Settings, font_family: str) -> Image.Image:
+    """Bitmap that gets sent to the printer — exactly sticker_width × sticker_height.
 
-    The outline never reaches the printer; print_doc() calls render_label().
+    Content (one or more copies stacked with copy_spacer_mm gaps) is top-aligned
+    inside the sticker face. Anything past sticker_height is silently clipped —
+    the user sees this in the preview before pressing Print.
     """
-    bitmap = render_label(doc, font_family)
-    if doc.sticker_height_mm <= 0:
-        return bitmap.convert("RGB")
+    sw = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(settings.sticker_width_mm * DOTS_PER_MM))))
+    sh = max(1, int(round(settings.sticker_height_mm * DOTS_PER_MM)))
+    spacer = max(0, int(round(doc.copy_spacer_mm * DOTS_PER_MM))) if doc.copies > 1 else 0
+    copies = max(1, min(50, doc.copies))
 
-    rgb = bitmap.convert("RGB")
-    draw = ImageDraw.Draw(rgb)
-    single_h = _render_single_copy(doc, font_family).height
-    slot_h, spacer_dots, copies = _slot_geometry(doc, single_h)
-    sticker_dots = max(1, int(round(doc.sticker_height_mm * DOTS_PER_MM)))
-    usable_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.usable_width_mm * DOTS_PER_MM))))
-    tape_dots = min(MAX_PRINT_WIDTH_DOTS, max(1, int(round(doc.tape_width_mm * DOTS_PER_MM))))
-    usable_dots = min(usable_dots, tape_dots)
-    if doc.h_align == "left":
-        outline_x0 = 0
-    elif doc.h_align == "right":
-        outline_x0 = tape_dots - usable_dots
-    else:
-        outline_x0 = (tape_dots - usable_dots) // 2
-    outline_x1 = outline_x0 + usable_dots
-
-    red = (220, 30, 30)
+    single = _render_content(doc, sw, font_family)
+    canvas = Image.new("L", (sw, sh), color=255)
     for i in range(copies):
-        slot_top = i * (slot_h + spacer_dots)
-        _draw_dashed_rect(draw, (outline_x0, slot_top, outline_x1, slot_top + sticker_dots),
-                          fill=red, width=2)
-    return rgb
+        y = i * (single.height + spacer)
+        if y >= sh:
+            break  # silent truncation — visible in preview
+        clip_h = min(single.height, sh - y)
+        canvas.paste(single.crop((0, 0, sw, clip_h)), (0, y))
+    return canvas
+
+
+def render_preview(doc: LabelDoc, settings: Settings, font_family: str) -> Image.Image:
+    """Preview render — the exact print bitmap, in RGB so the canvas can show
+    coloured chrome around it later if we want. No overlay drawn — the bitmap
+    edge IS the sticker boundary, and the preview canvas's sunken border
+    already makes that visible."""
+    return render_label(doc, settings, font_family).convert("RGB")
 
 
 # --------------------------------------------------------------------------- #
@@ -521,23 +459,29 @@ def _feed_mm(p, mm: float) -> None:
 
 
 def print_doc(doc: LabelDoc, settings: Settings) -> None:
+    """Send one print job. Total paper advance = paper_height_mm.
+
+    The printed bitmap covers the sticker face (sticker_height); ESC J then
+    advances the remaining (paper_height - sticker_height) to land at the
+    next sticker's top edge (plus tear-bar clearance the user baked into
+    paper_height).
+    """
     if Win32Raw is None:
         raise RuntimeError(
             "python-escpos Win32Raw is not available. Install python-escpos and run on Windows."
         )
-    img = render_label(doc, settings.default_font_family)
+    img = render_label(doc, settings, settings.default_font_family)
     # Threshold without dithering — sharper text on thermal media.
     bw = img.convert("1", dither=Image.Dither.NONE)
 
     p = Win32Raw(printer_name=settings.printer_name)
     try:
-        if settings.leading_feed_mm > 0:
-            _feed_mm(p, settings.leading_feed_mm)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             p.image(bw, impl="bitImageColumn")
-        if settings.trailing_feed_mm > 0:
-            _feed_mm(p, settings.trailing_feed_mm)
+        gap_mm = settings.paper_height_mm - settings.sticker_height_mm
+        if gap_mm > 0:
+            _feed_mm(p, gap_mm)
     finally:
         p.close()
 
@@ -547,7 +491,7 @@ def print_doc(doc: LabelDoc, settings: Settings) -> None:
 # --------------------------------------------------------------------------- #
 
 class SettingsDialog(tk.Toplevel):
-    """Modal dialog for editing per-machine Settings (printer name, feed mm, default font)."""
+    """Modal dialog for editing per-machine Settings (printer, media dimensions, default font)."""
 
     def __init__(self, parent: tk.Misc, settings: Settings, on_save: Callable[[Settings], None]) -> None:
         super().__init__(parent)
@@ -558,37 +502,56 @@ class SettingsDialog(tk.Toplevel):
         self._on_save = on_save
 
         self.printer_var = tk.StringVar(value=settings.printer_name)
-        self.lead_var = tk.DoubleVar(value=settings.leading_feed_mm)
-        self.trail_var = tk.DoubleVar(value=settings.trailing_feed_mm)
+        self.sticker_w_var = tk.DoubleVar(value=settings.sticker_width_mm)
+        self.sticker_h_var = tk.DoubleVar(value=settings.sticker_height_mm)
+        self.paper_w_var = tk.DoubleVar(value=settings.paper_width_mm)
+        self.paper_h_var = tk.DoubleVar(value=settings.paper_height_mm)
         self.font_var = tk.StringVar(value=settings.default_font_family)
         self.size_var = tk.IntVar(value=settings.default_size_pt)
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
 
-        ttk.Label(body, text="Printer name:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        ttk.Entry(body, textvariable=self.printer_var, width=24).grid(row=0, column=1, sticky="ew", pady=4)
+        row = 0
+        ttk.Label(body, text="Printer name:").grid(row=row, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(body, textvariable=self.printer_var, width=24).grid(row=row, column=1, sticky="ew", pady=4)
+        row += 1
 
-        ttk.Label(body, text="Leading feed (mm):").grid(row=1, column=0, sticky="w", padx=4, pady=4)
-        ttk.Spinbox(body, from_=0, to=200, increment=1, textvariable=self.lead_var, width=10).grid(
-            row=1, column=1, sticky="w", pady=4)
+        ttk.Label(body, text="Sticker width (mm):").grid(row=row, column=0, sticky="w", padx=4, pady=4)
+        ttk.Spinbox(body, from_=10, to=80, increment=0.5, textvariable=self.sticker_w_var, width=10).grid(
+            row=row, column=1, sticky="w", pady=4)
+        row += 1
 
-        ttk.Label(body, text="Trailing feed (mm):").grid(row=2, column=0, sticky="w", padx=4, pady=4)
-        ttk.Spinbox(body, from_=0, to=200, increment=1, textvariable=self.trail_var, width=10).grid(
-            row=2, column=1, sticky="w", pady=4)
+        ttk.Label(body, text="Sticker height (mm):").grid(row=row, column=0, sticky="w", padx=4, pady=4)
+        ttk.Spinbox(body, from_=10, to=200, increment=0.5, textvariable=self.sticker_h_var, width=10).grid(
+            row=row, column=1, sticky="w", pady=4)
+        row += 1
 
-        ttk.Label(body, text="Default font:").grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(body, text="Paper width (mm):").grid(row=row, column=0, sticky="w", padx=4, pady=4)
+        ttk.Spinbox(body, from_=10, to=80, increment=0.5, textvariable=self.paper_w_var, width=10).grid(
+            row=row, column=1, sticky="w", pady=4)
+        ttk.Label(body, text="(informational)", foreground="#888").grid(row=row, column=2, sticky="w", padx=4)
+        row += 1
+
+        ttk.Label(body, text="Paper height (mm):").grid(row=row, column=0, sticky="w", padx=4, pady=4)
+        ttk.Spinbox(body, from_=10, to=200, increment=0.5, textvariable=self.paper_h_var, width=10).grid(
+            row=row, column=1, sticky="w", pady=4)
+        ttk.Label(body, text="(advance per print)", foreground="#888").grid(row=row, column=2, sticky="w", padx=4)
+        row += 1
+
+        ttk.Label(body, text="Default font:").grid(row=row, column=0, sticky="w", padx=4, pady=4)
         # Preserve a custom legacy value (from a hand-edited settings file) by prepending it.
         font_values = list(FONT_FAMILIES)
         current_font = self.font_var.get().strip()
         if current_font and current_font not in font_values:
             font_values.insert(0, current_font)
         ttk.Combobox(body, textvariable=self.font_var, values=font_values,
-                     state="readonly", width=22).grid(row=3, column=1, sticky="w", pady=4)
+                     state="readonly", width=22).grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
 
-        ttk.Label(body, text="Default text size (pt):").grid(row=4, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(body, text="Default text size (pt):").grid(row=row, column=0, sticky="w", padx=4, pady=4)
         ttk.Spinbox(body, from_=6, to=96, increment=1, textvariable=self.size_var, width=10).grid(
-            row=4, column=1, sticky="w", pady=4)
+            row=row, column=1, sticky="w", pady=4)
 
         body.columnconfigure(1, weight=1)
 
@@ -601,8 +564,10 @@ class SettingsDialog(tk.Toplevel):
         try:
             new = Settings(
                 printer_name=self.printer_var.get().strip() or "BTP-L560",
-                leading_feed_mm=float(self.lead_var.get()),
-                trailing_feed_mm=float(self.trail_var.get()),
+                sticker_width_mm=max(10.0, float(self.sticker_w_var.get())),
+                sticker_height_mm=max(10.0, float(self.sticker_h_var.get())),
+                paper_width_mm=max(10.0, float(self.paper_w_var.get())),
+                paper_height_mm=max(10.0, float(self.paper_h_var.get())),
                 default_font_family=self.font_var.get().strip() or "Arial",
                 default_size_pt=max(6, int(self.size_var.get())),
             )
@@ -650,9 +615,9 @@ class LabelApp(tk.Tk):
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="About", command=self._help_about)
         help_menu.add_separator()
-        help_menu.add_command(label="Tape & sticker sizes…", command=self._help_tape)
+        help_menu.add_command(label="Sticker & paper sizes…", command=self._help_dimensions)
         help_menu.add_command(label="Element types…", command=self._help_elements)
-        help_menu.add_command(label="Printing & feed tuning…", command=self._help_printing)
+        help_menu.add_command(label="Printing & paper height…", command=self._help_printing)
         menubar.add_cascade(label="Help", menu=help_menu)
 
         self.config(menu=menubar)
@@ -686,36 +651,42 @@ class LabelApp(tk.Tk):
             "but the Print button needs the Windows print spooler.",
         )
 
-    def _help_tape(self) -> None:
+    def _help_dimensions(self) -> None:
         self._help_window(
-            "Tape & sticker sizes",
-            "TAPE WIDTH is the physical width of the paper coming out of the\n"
-            "printer — not the printable area, not the sticker face. For OEM\n"
-            "Alere rolls that's 56 mm. For 58 mm continuous receipt rolls it's\n"
-            "58 mm. Set this to whatever roll you have loaded.\n"
+            "Sticker & paper sizes",
+            "Two physical dimensions live in Settings. They describe the loaded\n"
+            "roll — set once per roll, not per design.\n"
             "\n"
-            "USABLE WIDTH is how much of that tape you actually want to print on.\n"
-            "Set it smaller than the tape width if your stickers have a margin\n"
-            "or you only want a strip of content. \"Place usable area\" controls\n"
-            "whether the unused band sits on the left, right, or splits centred.\n"
+            "STICKER = the visible adhesive label face (the printable area).\n"
+            "  Sticker width × sticker height. For OEM Alere: 58 × 70 mm.\n"
+            "  Every print bitmap is exactly this size; content beyond fits is\n"
+            "  silently clipped (you'll see the overflow in the preview).\n"
             "\n"
-            "STICKER HEIGHT is the height of one die-cut sticker (e.g. 70 mm for\n"
-            "the OEM Alere rolls, 40 mm for many generic 60×40 rolls). When set,\n"
-            "the preview draws a red dashed rectangle around each sticker so you\n"
-            "can see how your content fits — handy for checking that a \"big\"\n"
-            "layout actually fits, or that smaller content sits where you want\n"
-            "it inside the sticker. Set to 0 for continuous tape (no outline).\n"
+            "PAPER = the waxy liner the stickers sit on.\n"
+            "  Paper width is informational (the liner is slightly wider than\n"
+            "  the sticker face — for OEM Alere 62 mm vs 58 mm).\n"
+            "  Paper height is the TOTAL ADVANCE PER PRINT. It should cover:\n"
+            "    • The sticker face that just printed (sticker_height)\n"
+            "    • The 4–5 mm gap of liner between consecutive stickers\n"
+            "    • A few mm of tear-bar clearance so you can rip the print off\n"
+            "  Default 85 mm works for OEM Alere (70 sticker + 4.5 gap + ~10\n"
+            "  tear-bar). If consecutive prints drift, lower it; the printer's\n"
+            "  gap-detect should re-align on the next print start anyway.\n"
             "\n"
-            "MULTI-COPY PRINTING. The Copies field stacks N duplicates of your\n"
-            "design in one print job, separated by the configurable mm gap.\n"
-            "Use \"Fill to: [N] mm  [Calc copies]\" to compute how many copies\n"
-            "fit in a target tape length — type the target, click Calc, the\n"
-            "Copies field updates. Then Print and scissor them apart.\n"
+            "WHY TWO HEIGHTS?\n"
+            "  Sticker height = what we print onto.\n"
+            "  Paper height   = how far we advance per print.\n"
+            "  paper_height − sticker_height = dead feed (gap + tear-bar clearance).\n"
             "\n"
-            "TRAILING FEED in Settings (default 70 mm) is the separate \"advance\n"
-            "the tape so the perforation clears the tear bar\" knob — not the\n"
-            "same as sticker height. If your tear is short, raise it; if you\n"
-            "waste a blank label between prints, lower it.",
+            "MULTI-COPY (within one sticker)\n"
+            "  The Copies field stacks N duplicates of your design vertically\n"
+            "  inside one sticker — useful for cramming small labels (price\n"
+            "  tags, lot stickers). Click \"Max copies that fit\" to set N to\n"
+            "  the largest value that fits in sticker_height.\n"
+            "  To print multiple stickers, press Print multiple times.\n"
+            "\n"
+            "  No more continuous-tape mode — flex_label is a die-cut sticker\n"
+            "  tool now. For receipt printers, use a different app.",
         )
 
     def _help_elements(self) -> None:
@@ -738,8 +709,8 @@ class LabelApp(tk.Tk):
             "CUT MARKER\n"
             "  A dashed line with an optional caption like \"cut here\". DOES\n"
             "  print — it's a visible mark on the tape so you know where to\n"
-            "  scissor. Use this between two stickers' worth of content when\n"
-            "  printing several labels on one stretch of tape.\n"
+            "  scissor. Useful when stacking multiple copies inside one\n"
+            "  sticker — drop one between copies as a visible scissor guide.\n"
             "\n"
             "Spacer vs Cut marker: a Spacer is invisible whitespace; a Cut\n"
             "Marker is a printed line that tells you where to scissor.\n"
@@ -749,28 +720,34 @@ class LabelApp(tk.Tk):
 
     def _help_printing(self) -> None:
         self._help_window(
-            "Printing & feed tuning",
+            "Printing & paper height",
             "PRINTER NAME\n"
             "  Windows printer queue name. Default \"BTP-L560\" (matches the\n"
             "  install in RECIPE.md). If you renamed the queue, run\n"
-            "  `python list_printers.py` to find the exact name and paste it\n"
-            "  here.\n"
+            "  `python tools/list_printers.py` to find the exact name and\n"
+            "  paste it here.\n"
             "\n"
-            "LEADING FEED (mm)\n"
-            "  Paper advanced BEFORE printing. Set this small positive value\n"
-            "  if your content lands too high on the sticker. Typical: 0.\n"
+            "PAPER HEIGHT (mm) — the only feed knob.\n"
+            "  Total paper advance per print. Tune like this:\n"
+            "    • Start at 85 (OEM Alere defaults).\n"
+            "    • If the just-printed sticker doesn't fully eject past the\n"
+            "      tear bar, raise it 5 mm at a time.\n"
+            "    • If consecutive prints land misaligned on subsequent\n"
+            "      stickers, the printer's gap-detect should re-correct on\n"
+            "      the next print start. If it doesn't, run the FEED-button\n"
+            "      calibration cycle (RECIPE.md) or lower paper_height back\n"
+            "      to the perforation interval (74.5 mm for OEM Alere).\n"
             "\n"
-            "TRAILING FEED (mm)\n"
-            "  Paper advanced AFTER printing. Default 70 mm. This pushes the\n"
-            "  printed sticker past the tear bar so you can rip it off cleanly.\n"
-            "  Raise it if your tear edge is short of the bar; lower it if you\n"
-            "  waste a blank label between prints.\n"
+            "  The math: of paper_height mm advanced per print,\n"
+            "    sticker_height mm is the printed bitmap (the visible label),\n"
+            "    paper_height − sticker_height mm is dead feed (inter-sticker\n"
+            "    gap + tear-bar clearance).\n"
             "\n"
             "DEFAULT FONT / DEFAULT SIZE (pt)\n"
             "  Applied to NEW text blocks you add from now on. Existing blocks\n"
             "  keep their own size. The dropdown lists fonts that ship with\n"
-            "  Windows or MS Office; if a font isn't installed, the app silently\n"
-            "  falls back to Arial.",
+            "  Windows or MS Office; if a font isn't installed, the app\n"
+            "  silently falls back to Arial.",
         )
 
     # ---- Layout ----
@@ -792,56 +769,19 @@ class LabelApp(tk.Tk):
         self._build_right(right)
 
     def _build_left(self, parent: ttk.Frame) -> None:
-        tape = ttk.LabelFrame(parent, text="Tape", padding=8)
-        tape.pack(fill="x", pady=(0, 8))
+        ttk.Label(parent,
+                  text="Sticker & paper dimensions live in Settings.\n"
+                       "Per-block alignment is on each text/QR block.",
+                  foreground="#666", justify="left").pack(anchor="w", pady=(0, 8))
 
-        self.tape_width_var = tk.DoubleVar(value=self.doc.tape_width_mm)
-        self.usable_width_var = tk.DoubleVar(value=self.doc.usable_width_mm)
-        self.h_align_var = tk.StringVar(value=self.doc.h_align)
-
-        ttk.Label(tape, text="Tape width (mm):").grid(row=0, column=0, sticky="w", pady=2)
-        tw = ttk.Spinbox(tape, from_=10, to=80, increment=1,
-                         textvariable=self.tape_width_var, width=8,
-                         command=self._on_tape_change)
-        tw.grid(row=0, column=1, sticky="ew", pady=2)
-        tw.bind("<KeyRelease>", lambda e: self._on_tape_change())
-
-        ttk.Label(tape, text="Usable width (mm):").grid(row=1, column=0, sticky="w", pady=2)
-        uw = ttk.Spinbox(tape, from_=10, to=80, increment=1,
-                         textvariable=self.usable_width_var, width=8,
-                         command=self._on_tape_change)
-        uw.grid(row=1, column=1, sticky="ew", pady=2)
-        uw.bind("<KeyRelease>", lambda e: self._on_tape_change())
-
-        ttk.Label(tape, text="Place usable area:").grid(row=2, column=0, sticky="w", pady=(8, 2))
-        align_row = ttk.Frame(tape)
-        align_row.grid(row=2, column=1, sticky="w")
-        for opt in ALIGN_OPTIONS:
-            ttk.Radiobutton(align_row, text=opt.capitalize(), value=opt,
-                            variable=self.h_align_var,
-                            command=self._on_tape_change).pack(side="left")
-
-        self.sticker_height_var = tk.DoubleVar(value=self.doc.sticker_height_mm)
-        ttk.Label(tape, text="Sticker height (mm):").grid(row=3, column=0, sticky="w", pady=(8, 2))
-        sh = ttk.Spinbox(tape, from_=0, to=200, increment=1,
-                         textvariable=self.sticker_height_var, width=8,
-                         command=self._on_tape_change)
-        sh.grid(row=3, column=1, sticky="w", pady=(8, 2))
-        sh.bind("<KeyRelease>", lambda e: self._on_tape_change())
-        ttk.Label(tape, text="0 = continuous (no outline)",
-                  foreground="#888").grid(row=4, column=0, columnspan=2, sticky="w")
-
-        tape.columnconfigure(1, weight=1)
-
-        copies_frame = ttk.LabelFrame(parent, text="Copies", padding=8)
+        copies_frame = ttk.LabelFrame(parent, text="Copies (within one sticker)", padding=8)
         copies_frame.pack(fill="x", pady=(0, 8))
 
         self.copies_var = tk.IntVar(value=self.doc.copies)
         self.copy_spacer_var = tk.DoubleVar(value=self.doc.copy_spacer_mm)
-        self.fill_target_var = tk.DoubleVar(value=200.0)
 
         ttk.Label(copies_frame, text="Count:").grid(row=0, column=0, sticky="w", pady=2)
-        cn = ttk.Spinbox(copies_frame, from_=1, to=200, increment=1,
+        cn = ttk.Spinbox(copies_frame, from_=1, to=50, increment=1,
                          textvariable=self.copies_var, width=8,
                          command=self._on_copies_change)
         cn.grid(row=0, column=1, sticky="w", pady=2)
@@ -854,14 +794,9 @@ class LabelApp(tk.Tk):
         gp.grid(row=1, column=1, sticky="w", pady=2)
         gp.bind("<KeyRelease>", lambda e: self._on_copies_change())
 
-        fill_row = ttk.Frame(copies_frame)
-        fill_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Label(fill_row, text="Fill to:").pack(side="left")
-        ttk.Spinbox(fill_row, from_=10, to=2000, increment=10,
-                    textvariable=self.fill_target_var, width=7).pack(side="left", padx=(2, 2))
-        ttk.Label(fill_row, text="mm").pack(side="left")
-        ttk.Button(fill_row, text="Calc copies",
-                   command=self.action_calc_copies).pack(side="right")
+        ttk.Button(copies_frame, text="Max copies that fit",
+                   command=self.action_calc_copies).grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
         copies_frame.columnconfigure(1, weight=1)
 
@@ -1060,47 +995,37 @@ class LabelApp(tk.Tk):
             return
         self._set_field(idx, field_name, value)
 
-    def _on_tape_change(self) -> None:
-        try:
-            self.doc.tape_width_mm = float(self.tape_width_var.get())
-            self.doc.usable_width_mm = float(self.usable_width_var.get())
-            self.doc.sticker_height_mm = max(0.0, float(self.sticker_height_var.get()))
-        except (ValueError, TypeError, tk.TclError):
-            return
-        self.doc.h_align = self.h_align_var.get()
-        self.refresh_preview()
-
     def _on_copies_change(self) -> None:
         try:
-            self.doc.copies = max(1, min(200, int(self.copies_var.get())))
+            self.doc.copies = max(1, min(50, int(self.copies_var.get())))
             self.doc.copy_spacer_mm = max(0.0, float(self.copy_spacer_var.get()))
         except (ValueError, TypeError, tk.TclError):
             return
         self.refresh_preview()
 
     def action_calc_copies(self) -> None:
-        try:
-            target_mm = float(self.fill_target_var.get())
-        except (ValueError, TypeError, tk.TclError):
-            messagebox.showerror("Calc copies", "Enter a target length in mm.")
-            return
-        single = _render_single_copy(self.doc, self.settings.default_font_family)
+        """Set copies to the maximum number of content blocks that fit within
+        one sticker_height (the per-sticker vertical budget)."""
+        sw = min(MAX_PRINT_WIDTH_DOTS,
+                 max(1, int(round(self.settings.sticker_width_mm * DOTS_PER_MM))))
+        single = _render_content(self.doc, sw, self.settings.default_font_family)
         h_single_mm = single.height / DOTS_PER_MM
-        slot_mm = max(h_single_mm, self.doc.sticker_height_mm) if self.doc.sticker_height_mm > 0 else h_single_mm
+        sticker_mm = self.settings.sticker_height_mm
         spacer = max(0.0, self.doc.copy_spacer_mm)
-        if slot_mm <= 0:
+        if h_single_mm <= 0:
             return
-        # k slots take k*slot + (k-1)*spacer ≤ target
-        k = int((target_mm + spacer) // (slot_mm + spacer))
+        # k copies take k*content + (k-1)*spacer ≤ sticker
+        k = int((sticker_mm + spacer) // (h_single_mm + spacer))
         if k < 1:
             messagebox.showinfo(
-                "Calc copies",
-                f"One copy is {slot_mm:.1f} mm — doesn't fit in {target_mm:.0f} mm.",
+                "Max copies",
+                f"One copy is {h_single_mm:.1f} mm — doesn't fit in a "
+                f"{sticker_mm:.0f} mm sticker.",
             )
             return
         self.copies_var.set(k)
         self._on_copies_change()
-        self.status_var.set(f"Set copies to {k} (fits {target_mm:.0f} mm).")
+        self.status_var.set(f"Set copies to {k} (fits one sticker).")
 
     # ---- Selection / list actions ----
     def _on_select(self, _event: object = None) -> None:
@@ -1161,10 +1086,6 @@ class LabelApp(tk.Tk):
         ):
             return
         self.doc = LabelDoc()
-        self.tape_width_var.set(self.doc.tape_width_mm)
-        self.usable_width_var.set(self.doc.usable_width_mm)
-        self.h_align_var.set(self.doc.h_align)
-        self.sticker_height_var.set(self.doc.sticker_height_mm)
         self.copies_var.set(self.doc.copies)
         self.copy_spacer_var.set(self.doc.copy_spacer_mm)
         self.preset_var.set("")
@@ -1211,10 +1132,6 @@ class LabelApp(tk.Tk):
         except (OSError, json.JSONDecodeError) as e:
             messagebox.showerror("Load failed", str(e))
             return
-        self.tape_width_var.set(self.doc.tape_width_mm)
-        self.usable_width_var.set(self.doc.usable_width_mm)
-        self.h_align_var.set(self.doc.h_align)
-        self.sticker_height_var.set(self.doc.sticker_height_mm)
         self.copies_var.set(self.doc.copies)
         self.copy_spacer_var.set(self.doc.copy_spacer_mm)
         self.selected_index = None
@@ -1283,7 +1200,7 @@ class LabelApp(tk.Tk):
 
     def refresh_preview(self) -> None:
         try:
-            img = render_preview(self.doc, self.settings.default_font_family)
+            img = render_preview(self.doc, self.settings, self.settings.default_font_family)
         except Exception as e:  # noqa: BLE001 — render bugs shouldn't crash the GUI
             self.status_var.set(f"Preview error: {e}")
             self.print_btn.configure(state="disabled")
@@ -1299,13 +1216,11 @@ class LabelApp(tk.Tk):
         self.preview_canvas.create_image(0, 0, image=photo, anchor="nw")
         self.preview_canvas.configure(scrollregion=(0, 0, zoomed.width, zoomed.height))
 
-        approx_mm = img.height / DOTS_PER_MM
         copies = max(1, self.doc.copies)
         copy_word = "copy" if copies == 1 else "copies"
-        info = (f"{img.width}×{img.height} dots · {approx_mm:.1f} mm tall · "
-                f"{len(self.doc.elements)} blocks · {copies} {copy_word}")
-        if self.doc.sticker_height_mm > 0:
-            info += f" · sticker {self.doc.sticker_height_mm:g} mm"
+        sticker_mm = self.settings.sticker_height_mm
+        info = (f"sticker {self.settings.sticker_width_mm:g}×{sticker_mm:g} mm · "
+                f"{len(self.doc.elements)} blocks · {copies} {copy_word} per sticker")
         self.preview_info_var.set(info)
         self.print_btn.configure(state=("normal" if self.doc.elements else "disabled"))
 
