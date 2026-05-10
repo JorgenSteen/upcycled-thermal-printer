@@ -51,29 +51,33 @@ delete it first: *Settings → Printers & scanners → \[ghost\] → Remove*.
 
 ```powershell
 pip install -r requirements.txt
-python list_printers.py     # find the exact name Windows uses
-# edit PRINTER_NAME in print_test.py to match
-python print_test.py
+python tools/list_printers.py     # find the exact name Windows uses
+# edit PRINTER_NAME in tools/print_test.py to match
+python tools/print_test.py
 ```
 
 Files:
 
-- `requirements.txt` — `python-escpos` + `pywin32`
-- `list_printers.py` — enumerates installed Windows printers
-- `print_test.py` — minimal hello-world: text, separator, native QR
-- `check_queue.py` — prints printer status flags + pending jobs (debugging)
-- `label_gui.py` — Tkinter GUI for printing custom labels (title + body, alignment)
+- `requirements.txt` — `python-escpos` + `pywin32` + `Pillow` + `qrcode`
+- `flex_label.py` — the GUI app
+- `tools/list_printers.py` — enumerates installed Windows printers
+- `tools/print_test.py` — minimal hello-world: text, separator, native QR
+- `tools/check_queue.py` — prints printer status flags + pending jobs (debugging)
 
-## Tunable constants (in `label_gui.py`)
+## Tunable settings
 
-| Constant | Value | What to do if it's off |
+`flex_label.py` exposes everything tunable through **Settings** in the GUI
+(menu bar → Settings → Open Settings…):
+
+| Setting | Default | What to do if it's off |
 |---|---|---|
-| `PRINTER_NAME` | `"BTP-L560"` | Match the name in `list_printers.py` output. |
-| `LINE_WIDTH` | `26` | Dashes wrap to a 2nd line → lower it. Dashes look too short → raise it. The printer fits ~26-27 chars per line in ELITE font on 56 mm media. |
-| `TITLE_MAX_LINE_WIDTH` | `26` | Hard cap on each title line. |
-| `BODY_MAX_LINES` | `7` | Hard cap on body lines (Text widget enforces). |
-| `BODY_MAX_LINE_WIDTH` | `26` | Hard cap on chars per body line. |
-| `LABEL_FEED_MM` | `70` | Tear edge stops short of the tear bar → raise it. Wastes a blank label between prints → lower it. Implemented via `ESC J` (1 dot = 1/203 inch). |
+| Printer name | `BTP-L560` | Match the name in `tools/list_printers.py` output. |
+| Trailing feed (mm) | `70` | Tear edge stops short of the tear bar → raise it. Wastes a blank label between prints → lower it. Implemented via `ESC J` (1 dot = 1/203 inch). |
+| Leading feed (mm) | `0` | Set positive if content lands too high on the sticker. |
+| Default font / size | Arial / 12 pt | Applied to *new* text blocks; existing blocks keep their own size. |
+
+Per-document knobs (tape width, usable width, sticker height, copies, gap)
+live on the front panel.
 
 ## Sticker labels — what to buy
 
@@ -119,8 +123,8 @@ What to look for:
 - **Coating**: direct thermal (no ribbon).
 - **Detection**: gap-detect (don't bother with punched-hole-specific stock).
 - **Core**: 1″ (25 mm). **Max OD**: 80 mm.
-- **Height**: anything (40/50/60/70/100 mm common). Adjust `LABEL_FEED_MM`
-  in `label_gui.py` to match the new label height.
+- **Height**: anything (40/50/60/70/100 mm common). Set the matching
+  Sticker height on the front panel and the Trailing feed in Settings.
 
 Search terms (cheap, in order of hit-rate):
 
@@ -163,7 +167,7 @@ Examples: [Make Me A Label 58×60](https://makemealabel.com/products/58mm-x-60mm
   FEED-button menu — see manual Appendix 3).
 - **`p.ln(3)` is way too little for a 70 mm label** — it feeds ~12 mm, leaving
   most of the just-printed sticker still inside the printer. Use mm-based
-  feed via `ESC J` (`_feed_mm()` helper in `label_gui.py`). Default 70 mm
+  feed via `ESC J` (`_feed_mm()` helper in `flex_label.py`). Default 70 mm
   pushes one full label past the tear bar.
 - **Bitmap centring needs `media.width.pixel`** — `p.set(align="center")` plus
   bitmap-rendered content (default `qr()`, raster images) emits a warning and
