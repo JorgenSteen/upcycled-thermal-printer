@@ -7,9 +7,9 @@ rendering and dumps the bytes straight to the device.
 
 Steps:
   1. pip install -r requirements.txt
-  2. python list_printers.py   # find the exact name Windows uses
+  2. python tools/list_printers.py   # find the exact name Windows uses
   3. Edit PRINTER_NAME below
-  4. python print_test.py
+  4. python tools/print_test.py
 """
 from escpos.printer import Win32Raw
 
