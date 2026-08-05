@@ -5,3 +5,6 @@ __pycache__/
 flex_label_settings.json
 presets/
 *.png
+
+# Claude Code
+.claude/
