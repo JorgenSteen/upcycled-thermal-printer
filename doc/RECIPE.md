@@ -162,6 +162,16 @@ Examples: [Make Me A Label 58×60](https://makemealabel.com/products/58mm-x-60mm
   different physical USB port, the queue points at empty USB003 and prints
   silently fail. Either always use the same port (sticker the port), or go
   to *Printer properties → Ports* and tick the new `USBxxx` after switching.
+  Find which port the printer is actually on with PowerShell:
+  `Get-PnpDevice | Where-Object { $_.InstanceId -like 'USBPRINT*' }` — the
+  entry with Status `OK` is the live one — then
+  `Set-Printer -Name "BTP-L560" -PortName "USBnnn"`.
+  **Also check the offline flag**: while the queue pointed at a dead port,
+  Windows silently sets *Use Printer Offline* on it, and this persists after
+  the port is fixed — jobs then spool and sit in the queue forever. Untick it
+  in the queue window (*Printer* menu), or clear attribute bit `0x400` via
+  `win32print.SetPrinter`. Verify the fix with `python tools/feed_test.py`:
+  the paper should advance and `check_queue.py` should show 0 pending jobs.
   The proper fix is direct USB via libusb (requires the printer's
   `Interface Mode` to be flipped from `WinDriver Mode` to `API Mode` via the
   FEED-button menu — see manual Appendix 3).
