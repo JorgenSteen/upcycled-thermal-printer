@@ -1,7 +1,7 @@
 """Show printer status + any pending jobs for the BTP-L560."""
 import win32print
 
-PRINTER_NAME = "Label Printer 1"
+PRINTER_NAME = "BTP-L560"
 
 STATUS_FLAGS = {
     0x00000001: "PAUSED",
