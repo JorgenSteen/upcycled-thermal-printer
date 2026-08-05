@@ -13,7 +13,7 @@ Steps:
 """
 from escpos.printer import Win32Raw
 
-PRINTER_NAME = "Alere BTP-L560"
+PRINTER_NAME = "BTP-L560"
 
 LINE_WIDTH = 37  # font A at 56 mm print width
 
