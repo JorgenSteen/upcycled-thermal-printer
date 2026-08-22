@@ -162,7 +162,9 @@ Examples: [Make Me A Label 58×60](https://makemealabel.com/products/58mm-x-60mm
   different physical USB port, the queue points at empty USB003 and prints
   silently fail. Either always use the same port (sticker the port), or go
   to *Printer properties → Ports* and tick the new `USBxxx` after switching.
-  Find which port the printer is actually on with PowerShell:
+  **Quick fix: `python tools\fix_usb_swap.py`** — rebinds the queue to the
+  live port and clears the offline flag (both steps below) in one go.
+  Manual route: find which port the printer is actually on with PowerShell:
   `Get-PnpDevice | Where-Object { $_.InstanceId -like 'USBPRINT*' }` — the
   entry with Status `OK` is the live one — then
   `Set-Printer -Name "BTP-L560" -PortName "USBnnn"`.
